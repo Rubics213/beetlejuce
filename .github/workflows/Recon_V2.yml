@@ -1,0 +1,107 @@
+name: Vulnerability Scanning & Subdomain Detection
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: '13 1 * * *'  # 01:13 UTC
+    - cron: '47 5 * * *'  # 05:47 UTC
+    - cron: '29 9 * * *'  # 09:29 UTC
+    - cron: '53 14 * * *' # 14:53 UTC
+    - cron: '11 18 * * *' # 18:11 UTC
+
+permissions:
+  contents: read
+  actions: write  # Provides necessary permissions to upload artifacts
+
+jobs:
+  vulnerability-scan:
+    runs-on: ubuntu-latest
+    env:
+      ACTIONS_STEP_DEBUG: true  # Enable detailed debugging logs
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Install dependencies
+      - name: Install scanning dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git python3 python3-pip nikto nmap unzip
+          git clone https://github.com/aboul3la/Sublist3r.git
+          cd Sublist3r
+          pip3 install -r requirements.txt
+          cd ..
+          wget https://github.com/owasp-amass/amass/releases/download/v3.22.0/amass_linux_amd64.zip
+          unzip amass_linux_amd64.zip
+          sudo mv amass_linux_amd64/amass /usr/local/bin/
+
+      - name: Detect subdomains
+        run: |
+          set -e
+          mkdir -p subdomain_output old_subdomains
+          new_subdomains_detected=false
+
+          while IFS= read -r domain; do
+            echo "Finding subdomains for $domain"
+            output_file="subdomain_output/${domain//https:\/\//}_subdomains.txt"
+            python3 Sublist3r/sublist3r.py -d "$domain" -o "$output_file"
+
+            if [ -f "$output_file" ]; then
+              echo "Subdomain output file created: $output_file"
+              if [ -f "old_subdomains/${domain//https:\/\//}_old_subdomains.txt" ]; then
+                if ! diff "$output_file" "old_subdomains/${domain//https:\/\//}_old_subdomains.txt"; then
+                  echo "New subdomains detected for $domain"
+                  new_subdomains_detected=true
+                fi
+              else
+                echo "First run for $domain, no old subdomains to compare."
+                new_subdomains_detected=true
+              fi
+              cp "$output_file" "old_subdomains/${domain//https:\/\//}_old_subdomains.txt"
+            else
+              echo "No subdomains found for $domain. Skipping comparison."
+            fi
+          done < .github/workflows/domains.txt
+
+          echo "new_subdomains_detected=${new_subdomains_detected}" >> $GITHUB_ENV
+
+      - name: Run OWASP ZAP Scan
+        if: env.new_subdomains_detected == 'true'
+        uses: zaproxy/action-baseline@v0.10.0
+        with:
+          target: 'https://www.khealth.com/'
+          rules_file_name: '.github/workflows/zap/rules.tsv'
+
+      - name: Upload ZAP report
+        if: success() && env.new_subdomains_detected == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: owasp-zap-report.html
+
+      - name: Install Nikto
+        run: sudo apt-get update && sudo apt-get install -y nikto
+
+      - name: Run Nikto Scan
+        if: env.new_subdomains_detected == 'true'
+        run: |
+          mkdir -p nikto-output
+          nikto -h https://linkedin.com -output nikto-output/nikto_report.txt
+
+      - name: Upload Nikto report
+        if: success() && env.new_subdomains_detected == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nikto-report
+          path: nikto-output/nikto_report.txt
+
+      - name: Display Scan Summary
+        run: |
+          echo "OWASP ZAP and Nikto Scans Completed"
