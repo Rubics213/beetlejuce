@@ -79,8 +79,8 @@ jobs:
         if: env.new_subdomains_detected == 'true'  # Run ZAP only if new subdomains detected
         uses: zaproxy/action-baseline@v0.10.0
         with:
-          target: 'https://linkedin.com'  # Update with the actual target domain
-          rules_file_name: '.github/zap/rules.tsv'  # Optional: Custom rules can be defined here
+          target: 'https://www.khealth.com/'  # Update with the actual target domain
+          rules_file_name: '.github/workflows/zap/rules.tsv'  # Optional: Custom rules can be defined here
 
       - name: Upload ZAP report
         if: env.new_subdomains_detected == 'true'  # Upload report only if new subdomains detected
